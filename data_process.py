@@ -68,14 +68,10 @@ def _convert_dataset(split_name, filenames, dataset_dir):
                     # 读取图片
                     image_data = Image.open(filename)
                     # 根据模型rezsize
-                    # print(np.array(image_data).shape)
-                    # image_data = image_data.resize((224,224),Image.NEAREST)
+                    image_data = image_data.resize((224,224),Image.NEAREST)
                     # 灰度化
-                    # image_data = np.array(image_data.convert('L'))
-                    image_data = np.mean(np.array(image_data), axis=2, dtype=int)
-                    # image_data = np.squeeze(image_data, axis=2)
-                    print(image_data.shape)
-                    exit()
+                    image_data = np.array(image_data.convert('L'))
+
                     image_data = image_data.tobytes()
 
                     # 获取labels
@@ -95,6 +91,7 @@ def _convert_dataset(split_name, filenames, dataset_dir):
     sys.stdout.write('\n')
     sys.stdout.flush()
 
+
 def read_tfrecord(example_serialized):
     feature_map = {
         'image': tf.io.FixedLenFeature([], dtype=tf.string),
@@ -106,8 +103,11 @@ def read_tfrecord(example_serialized):
 
     features = tf.io.parse_single_example(example_serialized, feature_map)
 
-    image = tf.decode_raw(features['image'], tf.uint8)
 
+
+    image = tf.decode_raw(features['image'], tf.float64)
+
+    image = image /255.0
     # 转为灰度图
     # image = tf.reduce_mean(image, axis=-1)
 

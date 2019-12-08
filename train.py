@@ -6,10 +6,11 @@ import time
 
 import data_process
 
+
 DATADIR = './captcha/'
 TRAINDATA = 5000
 BATCH_SIZE = 32
-MAX_EPOCH = 500
+MAX_EPOCH = 200
 LEARNING_RATE = 0.001
 KEEP_PROB = 0.7
 
@@ -23,7 +24,7 @@ def get_batches(batch_size, fqueue):
         num_threads = 1
         capacity = min_after_dequeue + 30 * batch_size
 
-        image = tf.cast(tf.reshape(image, [224, 224, 1]), dtype=tf.float32)
+        image = tf.cast(tf.reshape(image, [60, 160, 1]), dtype=tf.float32)
         pack_these = [image, label]
         pack_name = ['image', 'label']
         all_batched = tf.train.shuffle_batch(
@@ -43,12 +44,12 @@ def get_batches(batch_size, fqueue):
 
 def get_weight(shape, is_training=True):
 
-    init = tf.random_normal(shape, stddev=0.1)
+    init = tf.random_normal(shape, stddev=0.01)
     return tf.Variable(initial_value=init, trainable=is_training)
 
 def get_bais(shape, is_training=True):
 
-    init = tf.zeros(shape) + 0.1
+    init = tf.random_normal(shape, stddev=0.1)
     return tf.Variable(initial_value=init, trainable=is_training)
 
 def conv2d(x, w):
@@ -67,7 +68,10 @@ def max_pool_2x2(x):
 
 def cnn(x, keep_prob):
     
-    '''x format = NHWC'''
+    '''
+        x format = NHWC
+        x shape: [batch, height, width, channel]
+    '''
     # batch_size, height, width = x.shape
 
     # CNN
@@ -79,6 +83,8 @@ def cnn(x, keep_prob):
 
         output_1 = tf.nn.relu(conv2d(x, w1) + b1)
         output_pool_1 = max_pool_2x2(output_1)
+        output_pool_1 = tf.nn.dropout(output_pool_1, keep_prob=keep_prob)
+
 
         # 第二层
         w2 = get_weight([3,3,32,64]) # 3x3 size, channel 32, output 64
@@ -86,6 +92,7 @@ def cnn(x, keep_prob):
 
         output_2 = tf.nn.relu(conv2d(output_pool_1, w2) + b2)
         output_pool_2 = max_pool_2x2(output_2)
+        output_pool_2 = tf.nn.dropout(output_pool_2, keep_prob=keep_prob)
 
         # 第三层
         w3 = get_weight([3,3,64,64]) # 3x3 size, channel 64, output 64
@@ -93,6 +100,7 @@ def cnn(x, keep_prob):
 
         output_3 = tf.nn.relu(conv2d(output_pool_2, w3) + b3)
         output_pool_3 = max_pool_2x2(output_3)
+        output_pool_3 = tf.nn.dropout(output_pool_3, keep_prob=keep_prob)
 
 
         # 全连接层 1
@@ -113,21 +121,45 @@ def cnn(x, keep_prob):
         return predict
 
 def cal_loss(predict, y):
-
+    with tf.name_scope('loss'):
     # 最后一层的激活函数在 sigmoid_cross_entropy_with_logits() 这个函数中，不用单独添加
-    return tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=y, logits=predict))
+    # loss0 = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=y[:, 0:10], logits=predict[:, 0:10]))
+    # loss1 = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=y[:,10:20], logits=predict[:,10:20]))
+    # loss2 = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=y[:,20:30], logits=predict[:,20:30]))
+    # loss3 = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(labels=y[:,30:40], logits=predict[:,30:40]))
 
-def train_one_epoch(sess, op):
+    # return (loss0+loss1+loss2+loss3) / 4
+    # y = tf.reshape(y, [-1, 4, 10])
+    # predict = tf.reshape(predict, [-1, 4, 10])
+        loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=y, logits=predict))
+        tf.summary.scalar('loss', loss)
+        return loss
+
+def cal_acc(predict, y):
+
+    with tf.name_scope('accurary'):
+
+        # accurary
+        predict_4 = tf.reshape(predict, [-1, 4, 10])
+        label_4 = tf.reshape(y, [-1, 4, 10])
+        correct_prediction = tf.equal(tf.argmax(label_4,2),tf.argmax(predict_4,2))
+        accurary = tf.reduce_mean(tf.cast(correct_prediction,tf.float32))
+        tf.summary.scalar('accurary', accurary)
+
+        return accurary
+
+def train_one_epoch(sess, op, train_writer):
 
     num_batch = TRAINDATA // BATCH_SIZE
 
     loss_sum = 0
     for i in range(num_batch):
         start_time = time.time()
-        global_step, loss_val, _, accurary_val = sess.run([op['step'], \
-                                         op['loss'], \
-                                         op['optimizer'], \
-                                         op['accurary']])
+        merge, global_step, loss_val, _, accurary_val = sess.run([op['merge'], \
+                                                                 op['step'], \
+                                                                 op['loss'], \
+                                                                 op['optimizer'], \
+                                                                 op['accurary']])
         end_time = time.time()
 
         loss_sum += loss_val
@@ -137,7 +169,7 @@ def train_one_epoch(sess, op):
         if global_step % 10 == 0:
             with open('./loss.txt', 'a+') as f:
                 f.write('step:%d, loss: %06f \n' % (global_step, loss_val))
-
+        train_writer.add_summary(merge, global_step)
     loss_avg = loss_sum / num_batch
     print("average loss in an epoch: %f ==================================="% (loss_avg))
 
@@ -148,7 +180,8 @@ def train():
     data_dirs = natsort.natsorted(filelist)
     all_files = []
     for data_dir in data_dirs:
-        all_files.append(DATADIR + data_dir)
+        if '.tfrecords' in data_dir:
+            all_files.append(DATADIR + data_dir)
 
     do_shuffle = True
     fqueue = tf.train.string_input_producer(all_files, shuffle=do_shuffle, name="input")
@@ -160,14 +193,16 @@ def train():
     # model
     predict = cnn(x, KEEP_PROB)
     loss = cal_loss(predict, y)
-    
+
     # accurary
-    correct_prediction = tf.equal(tf.argmax(y,1),tf.argmax(predict,1))
-    accurary = tf.reduce_mean(tf.cast(correct_prediction,tf.float32))
+    accurary = cal_acc(predict, y)
 
     # train and optimze
     step = tf.Variable(initial_value=0, trainable=False, name='gl_step')
-    lr = LEARNING_RATE
+    lr = tf.train.exponential_decay(learning_rate=LEARNING_RATE,\
+                                    global_step=step, \
+                                    decay_steps=2000, \
+                                    decay_rate=0.9 )
     optimizer = tf.train.AdamOptimizer(lr).minimize(loss, global_step=step)
 
     # save model
@@ -183,10 +218,16 @@ def train():
     coord = tf.train.Coordinator() 
     threads = tf.train.start_queue_runners(sess, coord)
 
+    # merged = tf.summary.merge([tf.get_collection(tf.GraphKeys.SUMMARIES,'accuracy'), \
+    #                            tf.get_collection(tf.GraphKeys.SUMMARIES,'loss')])
+    merged = tf.summary.merge_all()
+    train_writer = tf.summary.FileWriter('/checkpoints', sess.graph)
+
     init = tf.global_variables_initializer()
     sess.run(init)
 
     op = {
+        'merge': merged,
         'predict': predict,
         'loss': loss,
         'optimizer': optimizer,
@@ -197,13 +238,14 @@ def train():
     for epoch in range(MAX_EPOCH):
         print('**** EPOCH %03d ****' % (epoch))
 
-        train_one_epoch(sess, op)
+        train_one_epoch(sess, op, train_writer)
 
 
         if epoch % 5 == 0:
             savepath = saver.save(sess, os.path.join('./checkpoints', "model.ckpt"))
 
-    
+    train_writer.close()
+
     coord.request_stop()
     coord.join(threads)
 
