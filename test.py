@@ -75,7 +75,7 @@ if __name__ == "__main__":
 
     for i, line in enumerate(filename):
         x = Image.open(line)
-        x = np.mean(np.array(x), axis=2)
+        x = np.mean(np.array(x), axis=2) / 255.0
         image[i] = np.expand_dims(x, axis=3)
         # 获取labels
         name = line.split('/')[-1][0:4]
